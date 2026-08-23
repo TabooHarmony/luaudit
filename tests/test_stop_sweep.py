@@ -133,6 +133,40 @@ def test_cli_dispatch_stop_hook(p):
     assert rc == 0
 
 
+def test_stop_codex_dialect(p, monkeypatch, tmp_path):
+    """Codex Stop payloads (turn_id present) must get decision/reason, not
+    Claude's hookSpecificOutput shape; codex's strict parser fails otherwise."""
+    from tests.test_hook_policy import _diag as hp_diag, _luau_file, _capture_stdout, _run_edit_event
+    monkeypatch.setenv("LUAUDIT_HOME", str(tmp_path / "home"))
+    f = Path(_luau_file(tmp_path))
+    _fake_check(p, {str(f): [hp_diag(str(f))]})
+    _capture_stdout(p, lambda: _run_edit_event(p, str(f)))  # mark dirty
+    event = {"hook_event_name": "Stop", "turn_id": "t1",
+             "stop_hook_active": False, "cwd": tmp_path}
+    rc, payload = _capture_stdout(
+        p, lambda: p.run_stop_hook(event))
+    assert rc == 0
+    assert payload["decision"] == "block"
+    reason = payload["reason"]
+    assert "new warnings:" in reason
+    assert "hookSpecificOutput" not in payload
+
+
+def test_stop_claude_dialect(p, monkeypatch, tmp_path):
+    """Claude Stop payloads (no turn_id) keep hookSpecificOutput."""
+    from tests.test_hook_policy import _diag as hp_diag, _luau_file, _capture_stdout, _run_edit_event
+    monkeypatch.setenv("LUAUDIT_HOME", str(tmp_path / "home"))
+    f = Path(_luau_file(tmp_path))
+    _fake_check(p, {str(f): [hp_diag(str(f))]})
+    _capture_stdout(p, lambda: _run_edit_event(p, str(f)))
+    event = {"hook_event_name": "Stop", "stop_hook_active": False,
+             "cwd": tmp_path}
+    rc, payload = _capture_stdout(p, lambda: p.run_stop_hook(event))
+    assert rc == 0
+    ctx = payload["hookSpecificOutput"]["additionalContext"]
+    assert "new warnings:" in ctx
+
+
 # -- adaptive muting -----------------------------------------------------------
 
 def test_warning_mutes_after_threshold_and_announces_once(p):

@@ -1258,7 +1258,30 @@ def _collect_luau_files(root: str) -> list:
     return out
 
 
-def run_stop_hook() -> int:
+def _emit_stop(digest: str, is_codex: bool) -> None:
+    """Emit a turn-end digest in the harness's native Stop dialect.
+
+    Codex documents only decision/reason on stdout; its strict parser rejects
+    Claude-style hookSpecificOutput (observed live as 'Stop Failed').
+    decision:block makes codex continue the turn with the digest as the new
+    prompt, which is exactly the delivery we want.
+    Claude Code expects hookSpecificOutput.additionalContext (plain text or
+    other shapes are ignored).
+    """
+    if is_codex:
+        print(json.dumps({"decision": "block", "reason": digest}))
+    else:
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "Stop", "additionalContext": digest,
+        }}))
+
+
+def run_stop_hook(event: dict | None = None) -> int:
+    event = event if isinstance(event, dict) else {}
+    # codex marks its Stop payloads with a turn_id extension; Claude Code does
+    # not send it (both send stop_hook_active, so that alone can't distinguish).
+    is_codex = bool(event.get("turn_id"))
+    stop_hook_active = bool(event.get("stop_hook_active"))
     try:
         store = DeltaStore()
         dirty = store.pop_dirty_all()
@@ -1347,21 +1370,14 @@ def run_stop_hook() -> int:
             f"mutes={len(muted_announcements)}"
         )
         if not parts:
-            # Nothing new anywhere: one quiet line so a Stop hook with output
-            # still reads as intentional, then silence next time.
-            if tail:
-                print(json.dumps({"hookSpecificOutput": {
-                    "hookEventName": "Stop",
-                    "additionalContext": "[luaudit] sweep clean: " + ", ".join(tail) + ".",
-                }}))
+            # Nothing new anywhere: stay fully silent on repeat passes.
+            if tail and not stop_hook_active:
+                _emit_stop("[luaudit] sweep clean: " + ", ".join(tail) + ".", is_codex)
             return 0
         if tail:
             summary_bits.append(", ".join(tail))
         parts.insert(0, "[" + "; ".join(summary_bits) + "]")
-        print(json.dumps({"hookSpecificOutput": {
-            "hookEventName": "Stop",
-            "additionalContext": "\n\n".join(parts),
-        }}))
+        _emit_stop("\n\n".join(parts), is_codex)
         return 0
     except Exception:
         # The Stop hook must never wedge the agent's turn end. Any failure:
@@ -1377,7 +1393,7 @@ def run_hook() -> int:
     # Same script serves both hooks; route on the event name. The Stop
     # payload carries no file path, so this must happen before file handling.
     if str(event.get("hook_event_name", "")).lower() == "stop":
-        return run_stop_hook()
+        return run_stop_hook(event)
     filepath = _hook_event_file(event)
     if not filepath:
         return 0
@@ -1651,7 +1667,11 @@ def main(argv: list[str] | None = None) -> int:
         return run_mirror(argv[1:])
     if argv and argv[0] == "stop-hook":
         # Turn-end sweep. Invoked by the harnesses' Stop hook entries.
-        return run_stop_hook()
+        try:
+            event = json.load(sys.stdin)
+        except Exception:
+            event = {}
+        return run_stop_hook(event if isinstance(event, dict) else {})
     if argv and argv[0] in ("--help", "-h", "help"):
         print("luaudit plugin engine: hook mode (stdin event), 'check [--json] <paths>', 'mirror [--json] [--check-all]', or 'stop-hook' (turn-end sweep)")
         return 0

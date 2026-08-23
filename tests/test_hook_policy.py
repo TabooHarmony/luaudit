@@ -80,7 +80,8 @@ def _capture_stdout(p, fn):
 
 
 def _luau_file(p, name="a.luau"):
-    f = Path(p.os.getcwd()) / name
+    import os
+    f = Path(os.getcwd()) / name
     f.write_text("local x = 1\n")
     return str(f)
 
