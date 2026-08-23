@@ -24,5 +24,5 @@ else
 fi
 
 input="$(cat)"
-printf '%s' "$input" | "$PY_BIN" "$HOOK_DIR/luaudit_hook.py"
+printf '%s' "$input" | "$PY_BIN" "$HOOK_DIR/luaudit_hook.py" "$@"
 exit 0

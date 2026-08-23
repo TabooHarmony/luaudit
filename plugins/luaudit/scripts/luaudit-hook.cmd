@@ -7,7 +7,7 @@ rem forms break under that nested quoting (path gets prefixed with the caller
 rem CWD or the leading quote swallowed). The robust form: use the plugin-root
 rem env var codex sets (%CLAUDE_PLUGIN_ROOT% is stable and absolute), build the
 rem engine path from it, never from %~dp0 of this script.
-setlocal
+setlocal EnableDelayedExpansion
 rem Engine resolution order: harness-provided plugin root vars first, then
 rem this script's own directory (%~dp0). The %~dp0 fallback makes the
 rem launcher work under any harness that manages to execute it, including
@@ -26,24 +26,29 @@ if not exist "%ENGINE%" (
 
 rem Forward any launcher arguments (e.g. "stop-hook") to the engine.
 rem Prefer known real installs (harness hook envs may only expose the broken
-rem WindowsApps python alias on PATH).
-if exist "C:\Program Files\Python312\python.exe" (
-  "C:\Program Files\Python312\python.exe" "%ENGINE%" %*
-  exit /b %errorlevel%
-)
-if exist "C:\Python312\python.exe" (
-  "C:\Python312\python.exe" "%ENGINE%" %*
-  exit /b %errorlevel%
+rem WindowsApps python alias on PATH). Any Python3xx install location is
+rem accepted, not just 3.12.
+for %%V in (313 312 311 310) do (
+  if exist "C:\Program Files\Python%%V\python.exe" (
+    "C:\Program Files\Python%%V\python.exe" "%ENGINE%" %*
+    exit /b !errorlevel!
+  )
+  if exist "C:\Python%%V\python.exe" (
+    "C:\Python%%V\python.exe" "%ENGINE%" %*
+    exit /b !errorlevel!
+  )
 )
 
-where python >nul 2>nul
-if %errorlevel% equ 0 (
-  python "%ENGINE%" %*
-  exit /b %errorlevel%
-)
+rem py launcher knows about every registered interpreter and never resolves to
+rem a Store stub; prefer it over raw `where python` for that reason.
 where py >nul 2>nul
 if %errorlevel% equ 0 (
   py -3 "%ENGINE%" %*
+  exit /b %errorlevel%
+)
+where python >nul 2>nul
+if %errorlevel% equ 0 (
+  python "%ENGINE%" %*
   exit /b %errorlevel%
 )
 

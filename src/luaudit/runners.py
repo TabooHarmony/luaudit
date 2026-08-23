@@ -318,26 +318,3 @@ def _collapse_near_dups(merged: list[Diagnostic]) -> list[Diagnostic]:
         if not dup:
             out.append(d)
     return out
-
-
-# ---------------------------------------------------------------------------
-# Deprecated/kept small: check_code via stdin (useful for agents)
-# ---------------------------------------------------------------------------
-
-def check_code(code: str, filename: str = "snippet.luau") -> dict:
-    """Type-check a code string by writing a temp file and running checks."""
-    if not bootstrap.is_ready():
-        return {"error": bootstrap.last_error() or "setup incomplete"}
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".luau", prefix="luaudit_",
-                                     delete=False, encoding="utf-8") as tmp:
-        tmp.write(code)
-        tmp_path = tmp.name
-    try:
-        luau_results = run_luau_lsp(tmp_path, project_root=os.path.dirname(tmp_path))
-        selene_results = run_selene(tmp_path, project_root=os.path.dirname(tmp_path))
-        stylua_results = run_stylua_check(tmp_path, project_root=os.path.dirname(tmp_path))
-        for d in luau_results + selene_results + stylua_results:
-            d.file = filename
-        return to_dict(merge_diagnostics(luau_results, selene_results, stylua_results))
-    finally:
-        os.unlink(tmp_path)

@@ -92,8 +92,8 @@ local x: number = "boom"
 local unused = 1
 ```
 
-luaudit fires on its own and hands this back as context (verbatim output
-from a real codex run):
+luaudit fires on its own. The agent sees errors inline immediately, in this
+format (same layout as `luaudit check`, shown here for a codex run):
 
 ```
 broken2.luau:1:1: ERROR [luau-lsp/TypeError] Expected this to be 'number', but got 'string'
@@ -107,6 +107,21 @@ summary: 1 errors, 4 warnings, 5 total
 The agent follows luaudit's own hints: fixes the type, renames the dead
 variables to `_x` and `_unused`, re-checks, gets silence, and only then
 reports done. Nobody ran a linter by hand at any point.
+
+The example above shows error lines; warnings are held to the agent's turn
+end, then delivered in one sweep with a per-file repeat line ("3 previously
+reported warning(s) still present, unchanged") so a file that still has the
+same problems can't slip through silently across turns. Verified live in
+both Claude Code and Codex sessions.
+
+## Noise control
+
+- Errors always show inline immediately.
+- New warnings arrive once at turn end; identical repeats collapse to one
+  summary line.
+- After several unchanged repeats a warning auto-mutes itself; `luaudit
+  unmute` restores it. `--warnings` on `check` fails hard when you want
+  strictness instead of advisory output.
 
 ## Studio mirror
 

@@ -28,9 +28,20 @@ luaudit check <file-or-directory>
 
 ## Hook
 
-This plugin also installs a PostToolUse hook that runs automatically after
-Write/Edit on `.luau`/`.lua` files and feeds diagnostics back as context.
-Clean edits stay silent.
+This plugin also installs hooks that run on their own; you do not need to
+invoke anything.
+
+- After each Write/Edit of a `.luau`/`.lua` file, errors are shown inline
+  immediately (errors compound, so they are never held back).
+- Warnings are held until your turn ends. At turn end a sweep delivers new
+  warnings plus one line per file whose warnings repeat unchanged, so you
+  can fix or acknowledge them without mid-task noise.
+- Clean edits stay completely silent.
+- Repeated identical warnings collapse to a single line instead of piling up;
+  they auto-mute after several repeats and `luaudit unmute` brings them back.
+
+If the sweep reports findings at your turn end, address them (or explain why
+they are intentional) before finishing.
 
 ## What it checks
 
@@ -39,6 +50,10 @@ Clean edits stay silent.
 - Formatting via StyLua (advisory warning)
 
 The toolchain is downloaded once on first use into `~/.luaudit/`.
+
+Useful CLI commands: `luaudit check`, `format` (StyLua in place), `init`
+(default configs), `sourcemap`, `doctor` (`--bug-report` collects everything
+needed for a bug report), `unmute`, `plugin` (Studio mirror management).
 
 ## Script Sync users
 

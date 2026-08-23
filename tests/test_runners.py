@@ -1,5 +1,4 @@
-"""Tests for runners: config discovery, check_files with mocked binaries,
-and check_code via stdin."""
+"""Tests for runners: config discovery, check_files with mocked binaries."""
 
 from __future__ import annotations
 
@@ -66,10 +65,3 @@ def test_check_files_empty_dir_clean(tmp_path: Path):
     result = runners.check_files([str(tmp_path)], cwd=str(tmp_path))
     assert result["summary"]["total"] == 0
     assert "note" in result
-
-
-def test_check_code_virtual_filename(fake_toolchain):
-    result = runners.check_code("local x: number = 'bad'\n", filename="virtual.luau")
-    assert "error" not in result
-    for d in result.get("diagnostics", []):
-        assert d["file"] == "virtual.luau"

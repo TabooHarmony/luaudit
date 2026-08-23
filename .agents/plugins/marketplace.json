@@ -8,7 +8,6 @@
       "name": "luaudit",
       "source": "./plugins/luaudit",
       "description": "Luau diagnostics for AI coding agents (luau-lsp + selene + stylua). Advisory hook + skill after Write/Edit.",
-      "version": "1.0.0",
       "author": {
         "name": "TabooHarmony"
       }

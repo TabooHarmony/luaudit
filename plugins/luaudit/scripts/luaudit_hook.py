@@ -44,6 +44,7 @@ from pathlib import Path
 CACHE_DIR = Path(os.environ.get("LUAUDIT_HOME", Path.home() / ".luaudit"))
 BIN_DIR = CACHE_DIR / "bin"
 DEFS_DIR = CACHE_DIR / "defs"
+STATE_DIR = CACHE_DIR / "state"
 CONFIG_DIR = CACHE_DIR / "config"
 
 # Curated default selene config (kept identical to luaudit.bootstrap.SELENE_TOML;
@@ -253,10 +254,37 @@ def _download_and_extract_zip(url: str, dest_dir: Path) -> None:
 
 def ensure_tools() -> bool:
     """Download tools that are missing. Returns True if usable, False if any
-    hard requirement (luau-lsp or defs) is missing."""
+    hard requirement (luau-lsp or defs) is missing.
+
+    Failed hard downloads back off (1h) so a machine with no network doesn't
+    re-attempt a full download inside every 60s hook invocation."""
     urls = _urls()
     BIN_DIR.mkdir(parents=True, exist_ok=True)
     DEFS_DIR.mkdir(parents=True, exist_ok=True)
+    marker = STATE_DIR / "bootstrap-failed.json"
+    global _missing_optional
+    _missing_optional = set()
+
+    def _backed_off() -> bool:
+        try:
+            return time.time() - json.loads(marker.read_text())["t"] < 3600
+        except Exception:
+            return False
+
+    def _mark_failed() -> None:
+        try:
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            marker.write_text(json.dumps({"t": time.time()}))
+        except Exception:
+            pass
+
+    if marker.exists():
+        luau_lsp_probe = BIN_DIR / _exe("luau-lsp")
+        defs_probe = DEFS_DIR / DEFS_FILENAME
+        if luau_lsp_probe.exists() and defs_probe.exists():
+            marker.unlink(missing_ok=True)  # recovered since the failure
+        elif _backed_off():
+            return False
 
     luau_lsp = BIN_DIR / _exe("luau-lsp")
     if not luau_lsp.exists():
@@ -264,9 +292,11 @@ def ensure_tools() -> bool:
             _download_and_extract_zip(urls["luau-lsp"], BIN_DIR)
         except Exception as e:
             _log_event(f"ERROR luau-lsp download failed: {e}")
+            _mark_failed()
             return False
         if not luau_lsp.exists():
             _log_event("ERROR luau-lsp binary not found after extraction")
+            _mark_failed()
             return False
 
     selene = BIN_DIR / _exe("selene")
@@ -280,9 +310,11 @@ def ensure_tools() -> bool:
             _download_and_extract_zip(urls["selene"], BIN_DIR)
         except Exception as e:
             _log_event(f"WARNING selene download failed: {e}, linting skipped")
+            _missing_optional.add("selene")
         else:
             if not selene.exists():
                 _log_event("WARNING selene binary missing after install, linting skipped")
+                _missing_optional.add("selene")
 
     stylua = BIN_DIR / _exe("stylua")
     if not stylua.exists():
@@ -290,9 +322,11 @@ def ensure_tools() -> bool:
             _download_and_extract_zip(urls["stylua"], BIN_DIR)
         except Exception as e:
             _log_event(f"WARNING stylua download failed: {e}, formatting skipped")
+            _missing_optional.add("stylua")
         else:
             if not stylua.exists():
                 _log_event("WARNING stylua binary missing after install, formatting skipped")
+                _missing_optional.add("stylua")
 
     defs = DEFS_DIR / DEFS_FILENAME
     defs_ok = defs.exists() and defs.stat().st_size > 0
@@ -561,6 +595,15 @@ def check_file(filepath: str) -> list[dict]:
         })
         return all_diags
 
+    # Optional tools that failed to install must be visible, never silent:
+    # a type-check-only result that looks complete is a false pass.
+    for tool in sorted(globals().get("_missing_optional", set())):
+        all_diags.append({
+            "file": filepath, "line": 1, "column": 1, "code": "ToolMissing",
+            "severity": "warning", "source": "luaudit",
+            "message": f"{tool} unavailable (download failed), {tool} checks skipped this session; run 'luaudit doctor' after fixing your connection",
+        })
+
     project_luaurc = _find_config(project_root, (".luaurc",))
     sourcemap = _find_sourcemap(project_root)
     analyze_cwd = os.path.dirname(sourcemap) if sourcemap else None
@@ -692,7 +735,6 @@ STATE_MAX_FILES = 256
 STATE_MAX_AGE_DAYS = 14
 STATE_MAX_FINDINGS = 64
 
-STATE_DIR = CACHE_DIR / "state"
 _WS_RE = re.compile(r"\s+")
 
 # Turn-end sweep budget: never scan more than this many files or spend more

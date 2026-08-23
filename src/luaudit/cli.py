@@ -27,17 +27,6 @@ from .runners import check_files
 from .version import __version__
 
 
-def _print_plain(result: dict, cwd: str) -> None:
-    for d in result.get("diagnostics", []):
-        rel = d["file"]
-        try:
-            rel = str(Path(d["file"]).resolve().relative_to(Path(cwd).resolve()))
-        except (ValueError, OSError):
-            pass
-        sev = d["severity"].upper()
-        print(f"{rel}:{d['line']}:{d['column']}: {sev} [{d['source']}/{d['code']}] {d['message']}")
-
-
 def _cmd_check(args: argparse.Namespace) -> int:
     bootstrap.ensure_tools()
     targets = args.paths
