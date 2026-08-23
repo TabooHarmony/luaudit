@@ -2,8 +2,8 @@
 faked toolchain, asserting the v1.1 anti-noise behavior:
 
 - errors inject inline every time
-- new warnings inject once with detail
-- repeat warnings collapse to one count line
+- new warnings are HELD: one count line, detail deferred to turn end
+- repeat warnings collapse into the same count line
 - clean passes go silent AND forget stale fingerprints
 - fix -> regress reads as new again
 """
@@ -98,20 +98,21 @@ def test_error_injects_inline_every_time(p):
         assert "still present" not in ctx  # errors are never collapsed
 
 
-def test_new_warning_injects_once_then_collapses(p):
+def test_new_warning_is_held_not_injected(p):
     f = _luau_file(p)
     _fake_check(p, [_diag(f)])
     _, payload = _capture_stdout(p, lambda: _run_edit_event(p, f))
     ctx = payload["hookSpecificOutput"]["additionalContext"]
-    assert "UnusedVariable" in ctx          # first sighting: full detail
-    assert "still present" not in ctx
+    assert "UnusedVariable" not in ctx       # detail never injects inline
+    assert "1 new warning(s) held for the end-of-turn summary" in ctx
 
+    # Second edit, same warning: still just the count line (now a repeat).
     _fake_check(p, [_diag(f)])
     _, payload = _capture_stdout(p, lambda: _run_edit_event(p, f))
     ctx = payload["hookSpecificOutput"]["additionalContext"]
-    assert "UnusedVariable" not in ctx      # no re-injection...
-    assert "1 previously reported warning(s) still present" in ctx  # ...one count line
-    assert "luaudit check" in ctx           # escape hatch is advertised
+    assert "UnusedVariable" not in ctx
+    assert "1 previously reported warning(s) still present" in ctx
+    assert "luaudit check" in ctx            # escape hatch is advertised
 
 
 def test_warning_plus_error_still_injects_the_error_when_warning_repeats(p):
@@ -136,7 +137,7 @@ def test_clean_pass_silent_and_forgets(p):
     _fake_check(p, [_diag(f)])  # regressed
     _, payload = _capture_stdout(p, lambda: _run_edit_event(p, f))
     ctx = payload["hookSpecificOutput"]["additionalContext"]
-    assert "UnusedVariable" in ctx          # regression reads as NEW again
+    assert "1 new warning(s) held" in ctx   # regression reads as NEW (held) again
 
 
 def test_changed_line_same_warning_is_a_repeat(p):
@@ -174,5 +175,5 @@ def test_two_warnings_repeat_together_in_one_count_line(p):
     _fake_check(p, [_diag(f, code="A"), _diag(f, code="B"), _diag(f, code="C")])
     _, payload = _capture_stdout(p, lambda: _run_edit_event(p, f))
     ctx = payload["hookSpecificOutput"]["additionalContext"]
-    assert "C " in ctx or "C:" in ctx                       # new one detailed
+    assert "1 new warning(s) held" in ctx                    # C is held, counted
     assert "2 previously reported warning(s) still present" in ctx

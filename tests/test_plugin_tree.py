@@ -234,7 +234,9 @@ def test_engine_hook_bad_file_emits_contract(fake_toolchain, tmp_path):
     assert out["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert "luaudit diagnostics" in ctx
-    assert "[ERROR]" in ctx and "[WARNING]" in ctx
+    assert "[ERROR]" in ctx                      # errors inject inline
+    assert "[WARNING]" not in ctx                # warnings held to turn end
+    assert "held for the end-of-turn summary" in ctx
 
 
 def test_engine_hook_clean_file_silent(fake_toolchain, tmp_path):

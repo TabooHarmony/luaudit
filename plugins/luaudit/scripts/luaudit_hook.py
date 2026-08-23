@@ -1186,6 +1186,7 @@ def _hook_context(store: DeltaStore, entries: list) -> str | None:
     inline_parts: list = []
     repeat_total = 0
     suppressed_total = 0
+    held_total = 0
     for path, diags in entries:
         errors = [d for d in diags if d.get("severity") == "error"]
         warnings = [d for d in diags if d.get("severity") == "warning"]
@@ -1194,11 +1195,9 @@ def _hook_context(store: DeltaStore, entries: list) -> str | None:
             classified = store.classify(path, warnings)
             repeat_total += classified["repeat_count"]
             suppressed_total += classified["suppressed"]
-            shown = sorted(
-                errors + classified["new"],
-                key=lambda d: (int(d.get("line", 0)), int(d.get("column", 0))),
-            )
+            shown = sorted(errors, key=lambda d: (int(d.get("line", 0)), int(d.get("column", 0))))
             inline_parts.extend(_fmt_diag(d) for d in shown)
+            held_total += len(classified["new"])
             # Instrumentation: one compact line per diagnostic-bearing pass,
             # so future design decisions use numbers instead of vibes.
             _log_event(
@@ -1212,7 +1211,15 @@ def _hook_context(store: DeltaStore, entries: list) -> str | None:
             store.classify(path, [])
     parts: list = []
     if inline_parts:
-        parts.append("luaudit diagnostics:\n" + "\n".join(inline_parts))
+        parts.append(
+            "luaudit diagnostics:\n" + "\n".join(inline_parts) + "\n"
+            "(errors are shown because they compound; warnings are held to end of turn)"
+        )
+    if held_total:
+        parts.append(
+            f"[luaudit] {held_total} new warning(s) held for the end-of-turn summary "
+            "so they cannot derail mid-task; they arrive with the turn-end sweep."
+        )
     if repeat_total:
         parts.append(
             f"[luaudit] {repeat_total} previously reported warning(s) still present, unchanged"
@@ -1360,6 +1367,10 @@ def run_hook() -> int:
         event = json.load(sys.stdin)
     except json.JSONDecodeError:
         return 0
+    # Same script serves both hooks; route on the event name. The Stop
+    # payload carries no file path, so this must happen before file handling.
+    if str(event.get("hook_event_name", "")).lower() == "stop":
+        return run_stop_hook()
     filepath = _hook_event_file(event)
     if not filepath:
         return 0
