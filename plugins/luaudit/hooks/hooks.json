@@ -13,6 +13,20 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/luaudit-hook\" stop-hook",
+            "command_windows": "\"${CLAUDE_PLUGIN_ROOT}\\scripts\\luaudit-hook.cmd\" stop-hook",
+            "commandWindows": "\"${CLAUDE_PLUGIN_ROOT}\\scripts\\luaudit-hook.cmd\" stop-hook",
+            "timeout": 60
+          }
+        ]
+      }
     ]
   }
 }

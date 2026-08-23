@@ -679,6 +679,12 @@ STATE_MAX_FINDINGS = 64
 STATE_DIR = CACHE_DIR / "state"
 _WS_RE = re.compile(r"\s+")
 
+# Turn-end sweep budget: never scan more than this many files or spend more
+# than this many seconds wall time in one Stop hook. The sweep is a safety
+# net for cross-file breakage, not a full CI substitute.
+SWEEP_MAX_FILES = 400
+SWEEP_BUDGET_SECONDS = 20.0
+
 
 def _delta_normalize_key(filepath: str) -> str:
     try:
@@ -1176,6 +1182,116 @@ def _hook_context(store: DeltaStore, entries: list) -> str | None:
     return "\n\n".join(parts) if parts else None
 
 
+# ---------------------------------------------------------------------------
+# Turn-end sweep (Stop hook)
+#
+# When the agent finishes its turn, check the directories that saw edits this
+# session and report what the per-edit hook could not see: breakage in files
+# the agent never touched. Strictly informational: prints context only,
+# never blocks, never loops. Skips entirely when nothing changed.
+# ---------------------------------------------------------------------------
+
+def _collect_luau_files(root: str) -> list:
+    """All .luau/.lua files under root, nearest-first, capped."""
+    out: list = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        # Skip dependency/vendor trees; their diagnostics are not ours to fix.
+        dirnames[:] = [d for d in dirnames if d not in (".git", "node_modules", "Packages", "Vendor")]
+        for f in filenames:
+            if f.endswith((".luau", ".lua")):
+                out.append(os.path.join(dirpath, f))
+                if len(out) >= SWEEP_MAX_FILES:
+                    return out
+    return out
+
+
+def run_stop_hook() -> int:
+    try:
+        store = DeltaStore()
+        dirty = store.pop_dirty_all()
+        if not dirty:
+            return 0  # no Luau edits this session => stay silent
+        started = time.time()
+        all_diags: list = []
+        scanned = 0
+        truncated = False
+        seen_roots: set = set()
+        for root in dirty:
+            key = os.path.normcase(os.path.abspath(root))
+            if key in seen_roots or not os.path.isdir(root):
+                continue
+            seen_roots.add(key)
+            for f in _collect_luau_files(root):
+                if time.time() - started > SWEEP_BUDGET_SECONDS:
+                    truncated = True
+                    break
+                scanned += 1
+                result = check_paths([f], cwd=os.getcwd())
+                all_diags.extend(result["diagnostics"])
+            if truncated:
+                break
+
+        errors = [d for d in all_diags if d["severity"] == "error"]
+        warnings = [d for d in all_diags if d["severity"] == "warning"]
+
+        # Group by file so delta tracking stays per-file like the edit hook.
+        groups: dict = {}
+        order: list = []
+        for d in sorted(errors + warnings, key=lambda d: (os.path.normcase(d["file"]), d["line"])):
+            k = os.path.normcase(d["file"])
+            if k not in groups:
+                groups[k] = (d["file"], [])
+                order.append(k)
+            groups[k][1].append(d)
+
+        lines: list = []               # error detail lines
+        new_warnings: list = []
+        repeat_warning_count = 0
+        for path, diags in (groups[k] for k in order):
+            errs = [d for d in diags if d["severity"] == "error"]
+            warns = [d for d in diags if d["severity"] == "warning"]
+            lines.extend(_fmt_diag(d) for d in errs)
+            if warns:
+                cls = store.classify(path, warns)
+                repeat_warning_count += cls["repeat_count"]
+                new_warnings.extend(cls["new"])
+
+        summary_bits = [f"{scanned} file(s) checked across {len(seen_roots)} edited folder(s)"]
+        if truncated:
+            summary_bits.append("stopped early at the time budget")
+        parts: list = []
+        if lines:
+            parts.append("luaudit turn-end sweep:\n" + "\n".join(lines))
+        if new_warnings:
+            wlines = [_fmt_diag(d) for d in new_warnings[:10]]
+            more = "" if len(new_warnings) <= 10 else f"\n... and {len(new_warnings) - 10} more"
+            parts.append("new warnings:\n" + "\n".join(wlines) + more)
+        tail: list = []
+        if repeat_warning_count:
+            tail.append(f"{repeat_warning_count} known warning(s) unchanged")
+        if not parts:
+            # Nothing new anywhere: one quiet line so a Stop hook with output
+            # still reads as intentional, then silence next time.
+            if tail:
+                print(json.dumps({"hookSpecificOutput": {
+                    "hookEventName": "Stop",
+                    "additionalContext": "[luaudit] sweep clean: " + ", ".join(tail) + ".",
+                }}))
+            return 0
+        if tail:
+            summary_bits.append(", ".join(tail))
+        parts.insert(0, "[" + "; ".join(summary_bits) + "]")
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "Stop",
+            "additionalContext": "\n\n".join(parts),
+        }}))
+        return 0
+    except Exception:
+        # The Stop hook must never wedge the agent's turn end. Any failure:
+        # silence.
+        return 0
+
+
 def run_hook() -> int:
     try:
         event = json.load(sys.stdin)
@@ -1446,8 +1562,11 @@ def main(argv: list[str] | None = None) -> int:
         return run_cli(argv[1:])
     if argv and argv[0] == "mirror":
         return run_mirror(argv[1:])
+    if argv and argv[0] == "stop-hook":
+        # Turn-end sweep. Invoked by the harnesses' Stop hook entries.
+        return run_stop_hook()
     if argv and argv[0] in ("--help", "-h", "help"):
-        print("luaudit plugin engine: hook mode (stdin event), 'check [--json] <paths>', or 'mirror [--json] [--check-all]'")
+        print("luaudit plugin engine: hook mode (stdin event), 'check [--json] <paths>', 'mirror [--json] [--check-all]', or 'stop-hook' (turn-end sweep)")
         return 0
     return run_hook()
 

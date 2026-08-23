@@ -21,31 +21,32 @@ if not exist "%ENGINE%" (
   exit /b 8
 )
 
+rem Forward any launcher arguments (e.g. "stop-hook") to the engine.
 rem Prefer known real installs (harness hook envs may only expose the broken
 rem WindowsApps python alias on PATH).
 if exist "C:\Program Files\Python312\python.exe" (
-  "C:\Program Files\Python312\python.exe" "%ENGINE%"
+  "C:\Program Files\Python312\python.exe" "%ENGINE%" %*
   exit /b %errorlevel%
 )
 if exist "C:\Python312\python.exe" (
-  "C:\Python312\python.exe" "%ENGINE%"
+  "C:\Python312\python.exe" "%ENGINE%" %*
   exit /b %errorlevel%
 )
 
 where python >nul 2>nul
 if %errorlevel% equ 0 (
-  python "%ENGINE%"
+  python "%ENGINE%" %*
   exit /b %errorlevel%
 )
 where py >nul 2>nul
 if %errorlevel% equ 0 (
-  py -3 "%ENGINE%"
+  py -3 "%ENGINE%" %*
   exit /b %errorlevel%
 )
 
 rem No python on PATH: fall back to git-bash, which ships with the harnesses.
 if exist "C:\Program Files\Git\bin\bash.exe" (
-  "C:\Program Files\Git\bin\bash.exe" "%CLAUDE_PLUGIN_ROOT%\scripts\luaudit-hook.sh"
+  "C:\Program Files\Git\bin\bash.exe" "%CLAUDE_PLUGIN_ROOT%\scripts\luaudit-hook.sh" %*
   exit /b %errorlevel%
 )
 echo luaudit: python not found on Windows 1>&2
