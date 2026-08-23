@@ -12,7 +12,7 @@ from luaudit import bootstrap, cli
 def test_init_configs_writes_once(tmp_path: Path):
     wrote = bootstrap.init_configs(tmp_path)
     assert sorted(wrote) == [".luaurc", "selene.toml"]
-    assert (tmp_path / "selene.toml").read_text() == 'std = "roblox"\n'
+    assert (tmp_path / "selene.toml").read_text() == bootstrap.SELENE_TOML
     assert (tmp_path / ".luaurc").read_text().strip() == '{\n  "languageMode": "strict"\n}'
 
     # second call writes nothing

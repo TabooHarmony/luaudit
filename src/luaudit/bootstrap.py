@@ -199,7 +199,18 @@ def _download_file(url: str, dest: Path) -> None:
 # Config generation
 # ---------------------------------------------------------------------------
 
-SELENE_TOML = 'std = "roblox"\n'
+SELENE_TOML = '''# luaudit default selene config.
+# All error-severity lints and bug-signal warnings stay on; the three
+# known-noisy pure-style lints (multiple_statements, parenthese_conditions,
+# shadowing) are off out of the box. Delete this file to get selene's
+# unfiltered defaults, or add [lints] entries to re-enable anything.
+std = "roblox"
+
+[lints]
+multiple_statements = "allow"
+parenthese_conditions = "allow"
+shadowing = "allow"
+'''
 LUAURC = '{\n  "languageMode": "strict"\n}\n'
 
 

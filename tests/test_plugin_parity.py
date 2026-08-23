@@ -53,6 +53,16 @@ def test_sha256_pins_identical() -> None:
     )
 
 
+def test_default_selene_config_identical() -> None:
+    """The curated default selene.toml must not drift between engines."""
+    plugin = _load_plugin()
+    bs = _load_package_bootstrap()
+    assert plugin.SELENE_TOML == bs.SELENE_TOML
+    # And it must keep the three noisy style lints off.
+    for rule in ("multiple_statements", "parenthese_conditions", "shadowing"):
+        assert f'{rule} = "allow"' in plugin.SELENE_TOML, rule
+
+
 def test_every_download_url_is_pinned() -> None:
     plugin = _load_plugin()
     bs = _load_package_bootstrap()

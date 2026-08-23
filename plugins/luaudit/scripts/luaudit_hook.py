@@ -46,6 +46,22 @@ BIN_DIR = CACHE_DIR / "bin"
 DEFS_DIR = CACHE_DIR / "defs"
 CONFIG_DIR = CACHE_DIR / "config"
 
+# Curated default selene config (kept identical to luaudit.bootstrap.SELENE_TOML;
+# parity tests police this). Error-severity lints and bug-signal warnings stay
+# on; the three known-noisy pure-style lints are off out of the box.
+SELENE_TOML = '''# luaudit default selene config.
+# All error-severity lints and bug-signal warnings stay on; the three
+# known-noisy pure-style lints (multiple_statements, parenthese_conditions,
+# shadowing) are off out of the box. Delete this file to get selene's
+# unfiltered defaults, or add [lints] entries to re-enable anything.
+std = "roblox"
+
+[lints]
+multiple_statements = "allow"
+parenthese_conditions = "allow"
+shadowing = "allow"
+'''
+
 # Failure log (mirror of luaudit.bootstrap): appended on bootstrap/tool
 # failures so a failing user has one artifact to report.
 LOG_FILENAME = "luaudit.log"
@@ -296,7 +312,7 @@ def ensure_tools() -> bool:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     selene_toml = CONFIG_DIR / "selene.toml"
     if not selene_toml.exists():
-        selene_toml.write_text('std = "roblox"\n', encoding="utf-8")
+        selene_toml.write_text(SELENE_TOML, encoding="utf-8")
     luaurc = CONFIG_DIR / ".luaurc"
     if not luaurc.exists():
         luaurc.write_text('{\n  "languageMode": "strict"\n}\n', encoding="utf-8")
@@ -1183,6 +1199,13 @@ def _hook_context(store: DeltaStore, entries: list) -> str | None:
                 key=lambda d: (int(d.get("line", 0)), int(d.get("column", 0))),
             )
             inline_parts.extend(_fmt_diag(d) for d in shown)
+            # Instrumentation: one compact line per diagnostic-bearing pass,
+            # so future design decisions use numbers instead of vibes.
+            _log_event(
+                f"STATS edit {os.path.basename(path)}: errors={len(errors)} "
+                f"new_warn={len(classified['new'])} repeats={classified['repeat_count']} "
+                f"muted_seen={classified['suppressed']}"
+            )
         else:
             # Fully clean pass: forget stale fingerprints so a later
             # regression reads as new again and gets injected.
@@ -1304,6 +1327,11 @@ def run_stop_hook() -> int:
             # Mute announcements ride every path (full summary or quiet line)
             # so they are always visible exactly once, at the moment they fire.
             tail.extend(muted_announcements)
+        _log_event(
+            f"STATS sweep files={scanned} errors={len(errors)} "
+            f"new_warn={len(new_warnings)} repeats={repeat_warning_count} "
+            f"mutes={len(muted_announcements)}"
+        )
         if not parts:
             # Nothing new anywhere: one quiet line so a Stop hook with output
             # still reads as intentional, then silence next time.
