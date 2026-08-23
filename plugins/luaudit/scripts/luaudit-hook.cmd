@@ -8,12 +8,15 @@ rem CWD or the leading quote swallowed). The robust form: use the plugin-root
 rem env var codex sets (%CLAUDE_PLUGIN_ROOT% is stable and absolute), build the
 rem engine path from it, never from %~dp0 of this script.
 setlocal
+rem Engine resolution order: harness-provided plugin root vars first, then
+rem this script's own directory (%~dp0). The %~dp0 fallback makes the
+rem launcher work under any harness that manages to execute it, including
+rem user-level hook configs and direct calls where no plugin env exists.
 if not defined CLAUDE_PLUGIN_ROOT (
   if defined PLUGIN_ROOT set "CLAUDE_PLUGIN_ROOT=%PLUGIN_ROOT%"
 )
 if not defined CLAUDE_PLUGIN_ROOT (
-  echo luaudit: CLAUDE_PLUGIN_ROOT is not set, cannot locate engine 1>&2
-  exit /b 9
+  set "CLAUDE_PLUGIN_ROOT=%~dp0.."
 )
 set "ENGINE=%CLAUDE_PLUGIN_ROOT%\scripts\luaudit_hook.py"
 if not exist "%ENGINE%" (

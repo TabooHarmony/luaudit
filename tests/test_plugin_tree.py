@@ -116,13 +116,15 @@ def test_hooks_json_references_existing_script():
     assert (PLUGIN_DIR / ref).exists(), f"hooks.json references missing {ref}"
 
     # Windows command (codex 0.147's command_windows, used verbatim on win32)
-    # MUST be a literal absolute-style path with BACKSLASHES and the .cmd
-    # extension, inside one pair of quotes. The forward-slash/extensionless
-    # forms break under `cmd /C ""...""` (see skill reference).
+    # MUST be UNQUOTED with BACKSLASHES and the .cmd extension: codex runs the
+    # string through cmd as-is, and a leading quote makes cmd treat the whole
+    # string as a mangled command name ("is not recognized"). Proven live:
+    # quoted => never fires; unquoted => fires. Args are allowed after a
+    # space. The launcher's %~dp0 fallback makes it env-var independent.
     cw = hook.get("command_windows") or hook.get("commandWindows")
     assert cw, "hooks.json must ship command_windows for Windows"
-    mw = re.match(r'^"(\$\{CLAUDE_PLUGIN_ROOT\}\\[^"]+\.cmd)"$', cw)
-    assert mw, f"command_windows must be a quoted backslash .cmd path, got {cw}"
+    mw = re.match(r'^\$\{CLAUDE_PLUGIN_ROOT\}\\([^"]+\.cmd)( stop-hook)?$', cw)
+    assert mw, f"command_windows must be an unquoted backslash .cmd path, got {cw}"
     refw = mw.group(1).replace("${CLAUDE_PLUGIN_ROOT}\\", "", 1)
     refw_native = Path(*refw.split("\\"))
     assert (PLUGIN_DIR / refw_native).exists(), f"command_windows references missing {refw}"

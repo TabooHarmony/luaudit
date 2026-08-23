@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/luaudit-hook\"",
-            "command_windows": "\"${CLAUDE_PLUGIN_ROOT}\\scripts\\luaudit-hook.cmd\"",
+            "command_windows": "${CLAUDE_PLUGIN_ROOT}\\scripts\\luaudit-hook.cmd",
             "timeout": 60
           }
         ]
@@ -19,7 +19,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/luaudit-hook\" stop-hook",
-            "command_windows": "\"${CLAUDE_PLUGIN_ROOT}\\scripts\\luaudit-hook.cmd\" stop-hook",
+            "command_windows": "${CLAUDE_PLUGIN_ROOT}\\scripts\\luaudit-hook.cmd stop-hook",
             "timeout": 60
           }
         ]
