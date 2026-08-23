@@ -2,13 +2,12 @@
   "hooks": {
     "PostToolUse": [
       {
-        "matcher": "Bash|Write|Edit|MultiEdit|PowerShell|shell_command",
+        "matcher": "Bash|Write|Edit|MultiEdit|PowerShell|shell_command|apply_patch",
         "hooks": [
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/luaudit-hook\"",
             "command_windows": "\"${CLAUDE_PLUGIN_ROOT}\\scripts\\luaudit-hook.cmd\"",
-            "commandWindows": "\"${CLAUDE_PLUGIN_ROOT}\\scripts\\luaudit-hook.cmd\"",
             "timeout": 60
           }
         ]
@@ -16,13 +15,11 @@
     ],
     "Stop": [
       {
-        "matcher": "*",
         "hooks": [
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/luaudit-hook\" stop-hook",
             "command_windows": "\"${CLAUDE_PLUGIN_ROOT}\\scripts\\luaudit-hook.cmd\" stop-hook",
-            "commandWindows": "\"${CLAUDE_PLUGIN_ROOT}\\scripts\\luaudit-hook.cmd\" stop-hook",
             "timeout": 60
           }
         ]
