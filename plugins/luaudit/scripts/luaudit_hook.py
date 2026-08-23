@@ -661,6 +661,206 @@ def _result(diags: list[dict]) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Delta store (mirror of luaudit.deltastore)
+#
+# Remembers what the agent was already shown so repeats collapse to a count
+# instead of re-injecting identical context every edit. Identity = code +
+# normalized message, stable across line shifts and unrelated edits; a
+# fingerprint absent from a pass is forgotten so fix -> regress reads as new.
+# Every failure mode degrades to "everything is new": bookkeeping must never
+# break the hook.
+# ---------------------------------------------------------------------------
+
+DELTA_SCHEMA = 1
+STATE_MAX_FILES = 256
+STATE_MAX_AGE_DAYS = 14
+STATE_MAX_FINDINGS = 64
+
+STATE_DIR = CACHE_DIR / "state"
+_WS_RE = re.compile(r"\s+")
+
+
+def _delta_normalize_key(filepath: str) -> str:
+    try:
+        return os.path.normcase(os.path.abspath(filepath))
+    except (TypeError, ValueError):
+        return str(filepath)
+
+
+def _delta_fingerprint(diag: dict) -> str:
+    code = str(diag.get("code", ""))
+    message = _WS_RE.sub(" ", str(diag.get("message", ""))).strip()
+    return f"{code}|{message}"
+
+
+def _delta_prune(data: dict, now: float) -> None:
+    cutoff = now - STATE_MAX_AGE_DAYS * 86400
+    files = data.get("files", {})
+    for key in list(files.keys()):
+        entry = files[key]
+        if float(entry.get("last_seen", 0)) < cutoff:
+            del files[key]
+    overflow = len(files) - STATE_MAX_FILES
+    if overflow > 0:
+        by_age = sorted(files.items(), key=lambda kv: float(kv[1].get("last_seen", 0)))
+        for key, _ in by_age[:overflow]:
+            del files[key]
+    for entry in files.values():
+        findings = entry.get("findings", {})
+        extra = len(findings) - STATE_MAX_FINDINGS
+        if extra > 0:
+            by_age = sorted(findings.items(), key=lambda kv: float(kv[1].get("last_seen", 0)))
+            for fp, _ in by_age[:extra]:
+                del findings[fp]
+
+
+class DeltaStore:
+    def __init__(self, state_dir=None):
+        self.state_dir = Path(state_dir) if state_dir else STATE_DIR
+        self.path = self.state_dir / "delta.json"
+
+    def _load(self) -> dict:
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict) and raw.get("schema") == DELTA_SCHEMA:
+                return raw
+        except (OSError, ValueError):
+            pass
+        return {"schema": DELTA_SCHEMA, "files": {}, "muted": {}, "dirty": {}}
+
+    def _save(self, data: dict) -> None:
+        try:
+            self.state_dir.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
+            os.replace(tmp, self.path)
+        except OSError:
+            pass
+
+    @staticmethod
+    def _empty_file_entry() -> dict:
+        return {"hash": None, "findings": {}, "last_seen": 0.0}
+
+    def classify(self, filepath: str, diagnostics: list, now: float | None = None) -> dict:
+        """Split diagnostics into new vs repeats. Identity = fingerprint seen
+        before (regardless of line shifts or unrelated edits). A fingerprint
+        absent from this pass is forgotten, so fix -> regress reads as new.
+        Returns {"new": [...], "repeats": [...], "repeat_count": int,
+        "suppressed": int}. Never raises; any internal failure reports
+        everything as new."""
+        now = time.time() if now is None else now
+        result = {"new": [], "repeats": [], "repeat_count": 0, "suppressed": 0}
+        try:
+            data = self._load()
+            key = _delta_normalize_key(filepath)
+            entry = data["files"].get(key) or self._empty_file_entry()
+            findings: dict = entry.get("findings", {})
+            muted: dict = data.get("muted", {})
+
+            seen_fps: set = set()
+            for diag in diagnostics:
+                fp = _delta_fingerprint(diag)
+                seen_fps.add(fp)
+                if fp in muted:
+                    result["suppressed"] += 1
+                    continue
+                rec = findings.get(fp)
+                if rec is not None:
+                    rec["n"] = int(rec.get("n", 1)) + 1
+                    rec["last_seen"] = now
+                    result["repeats"].append(diag)
+                    result["repeat_count"] += 1
+                else:
+                    findings[fp] = {"n": 1, "first_seen": now, "last_seen": now}
+                    result["new"].append(diag)
+
+            # Forget fingerprints that vanished this pass.
+            for gone in [fp for fp in findings if fp not in seen_fps]:
+                del findings[gone]
+
+            entry["findings"] = findings
+            entry.pop("hash", None)
+            entry["last_seen"] = now
+            data["files"][key] = entry
+            _delta_prune(data, now)
+            self._save(data)
+        except Exception:
+            result = {"new": list(diagnostics), "repeat_count": 0, "suppressed": 0}
+        return result
+
+    def surface_counts(self, filepath: str) -> dict:
+        try:
+            data = self._load()
+            entry = data["files"].get(_delta_normalize_key(filepath))
+            if not entry:
+                return {}
+            return {fp: int(rec.get("n", 0)) for fp, rec in entry.get("findings", {}).items()}
+        except Exception:
+            return {}
+
+    def muted(self) -> dict:
+        try:
+            return dict(self._load().get("muted", {}))
+        except Exception:
+            return {}
+
+    def mute(self, fp: str, sample_message: str = "", now: float | None = None) -> None:
+        now = time.time() if now is None else now
+        try:
+            data = self._load()
+            data.setdefault("muted", {})[fp] = {"sample": sample_message[:200], "at": now}
+            self._save(data)
+        except Exception:
+            pass
+
+    def unmute(self, fp=None) -> int:
+        try:
+            data = self._load()
+            muted = data.get("muted", {})
+            if fp is None:
+                removed = len(muted)
+                data["muted"] = {}
+            else:
+                removed = 1 if fp in muted else 0
+                muted.pop(fp, None)
+            self._save(data)
+            return removed
+        except Exception:
+            return 0
+
+    def mark_dirty(self, root: str, now: float | None = None) -> None:
+        try:
+            now = time.time() if now is None else now
+            data = self._load()
+            data.setdefault("dirty", {})[_delta_normalize_key(root)] = now
+            self._save(data)
+        except Exception:
+            pass
+
+    def pop_dirty(self, root: str) -> bool:
+        try:
+            data = self._load()
+            key = _delta_normalize_key(root)
+            dirty = data.get("dirty", {})
+            was = key in dirty
+            dirty.pop(key, None)
+            self._save(data)
+            return was
+        except Exception:
+            return False
+
+    def pop_dirty_all(self) -> list:
+        try:
+            data = self._load()
+            dirty = data.get("dirty", {})
+            data["dirty"] = {}
+            self._save(data)
+            return list(dirty.keys())
+        except Exception:
+            return []
+
+
+# ---------------------------------------------------------------------------
 # Hook mode
 # ---------------------------------------------------------------------------
 
@@ -924,6 +1124,58 @@ def _plugin_nag(now: float | None = None, filepath: str | None = None) -> str:
         return ""
 
 
+def _fmt_diag(d: dict) -> str:
+    return f"{d['file']}:{d['line']}:{d['column']}: [{d['severity'].upper()}] {d['code']} {d['message']}"
+
+
+# ---------------------------------------------------------------------------
+# Injection policy (the v1.1 anti-noise behavior)
+#
+#   errors          : always inline, every time (they compound if ignored)
+#   new warnings    : inline once, full detail (first sighting)
+#   repeat warnings : collapsed to one count line (agent already saw them)
+#
+# Nothing is dropped; repeats are summarized. State bookkeeping is the delta
+# store's problem and can fail open silently.
+# ---------------------------------------------------------------------------
+
+def _hook_context(store: DeltaStore, entries: list) -> str | None:
+    """Build hook context under the injection policy.
+
+    entries: list of (abs_path, diagnostics) pairs. Returns the additionalContext
+    payload, or None when there is nothing worth interrupting the agent for.
+    """
+    inline_parts: list = []
+    repeat_total = 0
+    suppressed_total = 0
+    for path, diags in entries:
+        errors = [d for d in diags if d.get("severity") == "error"]
+        warnings = [d for d in diags if d.get("severity") == "warning"]
+        if errors or warnings:
+            # Only warnings participate in delta tracking; errors bypass it.
+            classified = store.classify(path, warnings)
+            repeat_total += classified["repeat_count"]
+            suppressed_total += classified["suppressed"]
+            shown = sorted(
+                errors + classified["new"],
+                key=lambda d: (int(d.get("line", 0)), int(d.get("column", 0))),
+            )
+            inline_parts.extend(_fmt_diag(d) for d in shown)
+        else:
+            # Fully clean pass: forget stale fingerprints so a later
+            # regression reads as new again and gets injected.
+            store.classify(path, [])
+    parts: list = []
+    if inline_parts:
+        parts.append("luaudit diagnostics:\n" + "\n".join(inline_parts))
+    if repeat_total:
+        parts.append(
+            f"[luaudit] {repeat_total} previously reported warning(s) still present, unchanged"
+            " (not repeated here). Full list anytime: luaudit check <file>"
+        )
+    return "\n\n".join(parts) if parts else None
+
+
 def run_hook() -> int:
     try:
         event = json.load(sys.stdin)
@@ -932,18 +1184,24 @@ def run_hook() -> int:
     filepath = _hook_event_file(event)
     if not filepath:
         return 0
+    store = DeltaStore()
     if filepath == "__MCP_MIRROR__":
         # Studio-bridge MCP edit: check the mirrored tree (materialized by
-        # the mirror plugin from Studio). Clean => silent.
+        # the mirror plugin from Studio). Diagnostics carry their own script
+        # paths, so delta tracking groups per script. Clean => silent.
         result = _mirror_check(check_all=True)
         diags = [d for d in result.get("diagnostics", []) if d["severity"] in ("error", "warning")]
-        if not diags:
-            return 0  # clean => silent, the documented contract
-        lines = [
-            f"{d['file']}:{d['line']}:{d['column']}: [{d['severity'].upper()}] {d['code']} {d['message']}"
-            for d in diags
-        ]
-        ctx = "luaudit diagnostics (mirrored Studio tree):\n" + "\n".join(lines)
+        groups: dict = {}
+        order: list = []
+        for d in diags:
+            k = os.path.normcase(str(d.get("file", "")))
+            if k not in groups:
+                groups[k] = (str(d.get("file", "")), [])
+                order.append(k)
+            groups[k][1].append(d)
+        ctx = _hook_context(store, [groups[k] for k in order])
+        if not ctx:
+            return 0
         nag = _plugin_nag(filepath=filepath)
         if nag:
             ctx = ctx + "\n\n" + nag
@@ -959,15 +1217,18 @@ def run_hook() -> int:
     if not os.path.isfile(filepath):
         return 0
 
+    abspath = os.path.abspath(filepath)
+    # Any Luau write marks the directory dirty for the turn-end sweep,
+    # regardless of whether this pass produced diagnostics.
+    try:
+        store.mark_dirty(os.path.dirname(abspath))
+    except Exception:
+        pass
     result = check_paths([filepath], cwd=os.getcwd())
     diags = [d for d in result["diagnostics"] if d["severity"] in ("error", "warning")]
-    if not diags:
-        return 0  # clean => silent, the documented contract
-    lines = [
-        f"{d['file']}:{d['line']}:{d['column']}: [{d['severity'].upper()}] {d['code']} {d['message']}"
-        for d in diags
-    ]
-    ctx = "luaudit diagnostics:\n" + "\n".join(lines)
+    ctx = _hook_context(store, [(abspath, diags)])
+    if not ctx:
+        return 0  # nothing new => silent, the documented contract
     nag = _plugin_nag(filepath=filepath)
     if nag:
         ctx = ctx + "\n\n" + nag

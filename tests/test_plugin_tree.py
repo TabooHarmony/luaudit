@@ -502,7 +502,7 @@ exit 0
     out = json.loads(r.stdout)
     assert out["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "mirrored Studio tree" in ctx
+    assert "luaudit diagnostics:" in ctx
     assert "TypeError" in ctx
 
 
