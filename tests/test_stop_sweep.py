@@ -133,18 +133,54 @@ def test_cli_dispatch_stop_hook(p):
     assert rc == 0
 
 
+def _capture_stdout(fn):
+    buf = io.StringIO()
+    orig = sys.stdout
+    sys.stdout = buf
+    try:
+        rc = fn()
+    finally:
+        sys.stdout = orig
+    out = buf.getvalue().strip()
+    parsed = json.loads(out) if out else None
+    return rc, parsed
+
+
+def _hp_diag(path, code="UnusedVariable", severity="warning", message="x is never used", line=3):
+    return {"file": path, "line": line, "column": 7, "severity": severity,
+            "code": code, "message": message, "source": "luau-lsp"}
+
+
+def _edit_event(p, filepath):
+    event = {"tool_name": "Edit", "tool_input": {"file_path": filepath}}
+    p.__dict__.setdefault("_orig_stdin", sys.stdin)
+    sys.stdin = io.StringIO(json.dumps(event))
+    try:
+        return p.run_hook()
+    finally:
+        sys.stdin = p.__dict__["_orig_stdin"]
+
+
+def _tmp_luau(tmp_path):
+    f = Path(tmp_path) / "a.luau"
+    f.write_text("local x = 1\n")
+    return str(f)
+
+
 def test_stop_codex_dialect(p, monkeypatch, tmp_path):
     """Codex Stop payloads (turn_id present) must get decision/reason, not
     Claude's hookSpecificOutput shape; codex's strict parser fails otherwise."""
-    from tests.test_hook_policy import _diag as hp_diag, _luau_file, _capture_stdout, _run_edit_event
     monkeypatch.setenv("LUAUDIT_HOME", str(tmp_path / "home"))
-    f = Path(_luau_file(tmp_path))
-    _fake_check(p, {str(f): [hp_diag(str(f))]})
-    _capture_stdout(p, lambda: _run_edit_event(p, str(f)))  # mark dirty
+    f = _tmp_luau(tmp_path)
+    _fake_check(p, {f: [_hp_diag(f)]})
+    buf = io.StringIO(); old = sys.stdout; sys.stdout = buf
+    try:
+        _edit_event(p, f)  # mark dirty
+    finally:
+        sys.stdout = old
     event = {"hook_event_name": "Stop", "turn_id": "t1",
              "stop_hook_active": False, "cwd": tmp_path}
-    rc, payload = _capture_stdout(
-        p, lambda: p.run_stop_hook(event))
+    rc, payload = _capture_stdout(lambda: p.run_stop_hook(event))
     assert rc == 0
     assert payload["decision"] == "block"
     reason = payload["reason"]
@@ -154,14 +190,17 @@ def test_stop_codex_dialect(p, monkeypatch, tmp_path):
 
 def test_stop_claude_dialect(p, monkeypatch, tmp_path):
     """Claude Stop payloads (no turn_id) keep hookSpecificOutput."""
-    from tests.test_hook_policy import _diag as hp_diag, _luau_file, _capture_stdout, _run_edit_event
     monkeypatch.setenv("LUAUDIT_HOME", str(tmp_path / "home"))
-    f = Path(_luau_file(tmp_path))
-    _fake_check(p, {str(f): [hp_diag(str(f))]})
-    _capture_stdout(p, lambda: _run_edit_event(p, str(f)))
+    f = _tmp_luau(tmp_path)
+    _fake_check(p, {f: [_hp_diag(f)]})
+    buf = io.StringIO(); old = sys.stdout; sys.stdout = buf
+    try:
+        _edit_event(p, f)
+    finally:
+        sys.stdout = old
     event = {"hook_event_name": "Stop", "stop_hook_active": False,
              "cwd": tmp_path}
-    rc, payload = _capture_stdout(p, lambda: p.run_stop_hook(event))
+    rc, payload = _capture_stdout(lambda: p.run_stop_hook(event))
     assert rc == 0
     ctx = payload["hookSpecificOutput"]["additionalContext"]
     assert "new warnings:" in ctx
