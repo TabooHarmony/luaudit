@@ -768,10 +768,14 @@ class DeltaStore:
     def _empty_file_entry() -> dict:
         return {"hash": None, "findings": {}, "last_seen": 0.0}
 
-    def classify(self, filepath: str, diagnostics: list, now: float | None = None) -> dict:
+    def classify(self, filepath: str, diagnostics: list, now: float | None = None,
+                 commit_new: bool = True) -> dict:
         """Split diagnostics into new vs repeats. Identity = fingerprint seen
         before (regardless of line shifts or unrelated edits). A fingerprint
         absent from this pass is forgotten, so fix -> regress reads as new.
+        With commit_new=False, first sightings are reported as new but NOT
+        recorded, so a later pass still sees them as fresh (used by the edit
+        hook: warnings it holds must stay deliverable by the turn-end sweep).
         Returns {"new": [...], "repeats": [...], "repeat_count": int,
         "suppressed": int}. Never raises; any internal failure reports
         everything as new."""
@@ -798,7 +802,8 @@ class DeltaStore:
                     result["repeats"].append(diag)
                     result["repeat_count"] += 1
                 else:
-                    findings[fp] = {"n": 1, "first_seen": now, "last_seen": now}
+                    if commit_new:
+                        findings[fp] = {"n": 1, "first_seen": now, "last_seen": now}
                     result["new"].append(diag)
 
             # Forget fingerprints that vanished this pass.
@@ -1192,7 +1197,9 @@ def _hook_context(store: DeltaStore, entries: list) -> str | None:
         warnings = [d for d in diags if d.get("severity") == "warning"]
         if errors or warnings:
             # Only warnings participate in delta tracking; errors bypass it.
-            classified = store.classify(path, warnings)
+            # commit_new=False: warnings we hold here must still be fresh for
+            # the turn-end sweep, which commits them when it shows them.
+            classified = store.classify(path, warnings, commit_new=False)
             repeat_total += classified["repeat_count"]
             suppressed_total += classified["suppressed"]
             shown = sorted(errors, key=lambda d: (int(d.get("line", 0)), int(d.get("column", 0))))

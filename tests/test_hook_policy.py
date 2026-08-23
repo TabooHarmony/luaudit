@@ -98,33 +98,43 @@ def test_error_injects_inline_every_time(p):
         assert "still present" not in ctx  # errors are never collapsed
 
 
-def test_new_warning_is_held_not_injected(p):
-    f = _luau_file(p)
-    _fake_check(p, [_diag(f)])
-    _, payload = _capture_stdout(p, lambda: _run_edit_event(p, f))
+def test_new_warning_is_held_until_sweep_delivers(p):
+    f = Path(_luau_file(p))
+    diag = _diag(str(f))
+    _fake_check(p, [diag])
+    _, payload = _capture_stdout(p, lambda: _run_edit_event(p, str(f)))
     ctx = payload["hookSpecificOutput"]["additionalContext"]
     assert "UnusedVariable" not in ctx       # detail never injects inline
     assert "1 new warning(s) held for the end-of-turn summary" in ctx
 
-    # Second edit, same warning: still just the count line (now a repeat).
-    _fake_check(p, [_diag(f)])
-    _, payload = _capture_stdout(p, lambda: _run_edit_event(p, f))
+    # Same turn, another edit: still undelivered, so still "held", not "reported".
+    _fake_check(p, [diag])
+    _, payload = _capture_stdout(p, lambda: _run_edit_event(p, str(f)))
+    ctx = payload["hookSpecificOutput"]["additionalContext"]
+    assert "1 new warning(s) held" in ctx
+    assert "still present" not in ctx
+
+    # The turn-end sweep delivers (and commits) it...
+    p.DeltaStore().classify(str(f), [diag])
+    # ...so a later edit escalates to the collapse line.
+    _fake_check(p, [diag])
+    _, payload = _capture_stdout(p, lambda: _run_edit_event(p, str(f)))
     ctx = payload["hookSpecificOutput"]["additionalContext"]
     assert "UnusedVariable" not in ctx
     assert "1 previously reported warning(s) still present" in ctx
     assert "luaudit check" in ctx            # escape hatch is advertised
 
 
-def test_warning_plus_error_still_injects_the_error_when_warning_repeats(p):
+def test_warning_plus_error_still_injects_the_error_when_warning_held(p):
     f = _luau_file(p)
     _fake_check(p, [_diag(f)])
-    _capture_stdout(p, lambda: _run_edit_event(p, f))  # warning seen once
+    _capture_stdout(p, lambda: _run_edit_event(p, f))  # warning seen once, held
     # next edit: same warning + a NEW error
     _fake_check(p, [_diag(f), _diag(f, code="TypeError", severity="error", message="bad types", line=9)])
     _, payload = _capture_stdout(p, lambda: _run_edit_event(p, f))
     ctx = payload["hookSpecificOutput"]["additionalContext"]
     assert "TypeError" in ctx                                   # error inline
-    assert "1 previously reported warning(s) still present" in ctx  # repeat collapsed
+    assert "1 new warning(s) held" in ctx                       # warning still deferred
 
 
 def test_clean_pass_silent_and_forgets(p):
@@ -141,12 +151,15 @@ def test_clean_pass_silent_and_forgets(p):
 
 
 def test_changed_line_same_warning_is_a_repeat(p):
-    """Line shifts must not make an old warning look new."""
-    f = _luau_file(p)
-    _fake_check(p, [_diag(f, line=3)])
-    _capture_stdout(p, lambda: _run_edit_event(p, f))
-    _fake_check(p, [_diag(f, line=42)])     # agent edited elsewhere; warning shifted
-    _, payload = _capture_stdout(p, lambda: _run_edit_event(p, f))
+    """Line shifts must not make an old warning look new once delivered."""
+    f = Path(_luau_file(p))
+    d1 = _diag(str(f), line=3)
+    _fake_check(p, [d1])
+    _capture_stdout(p, lambda: _run_edit_event(p, str(f)))
+    p.DeltaStore().classify(str(f), [d1])    # sweep delivers/commits it
+    d2 = _diag(str(f), line=42)              # agent edited elsewhere; warning shifted
+    _fake_check(p, [d2])
+    _, payload = _capture_stdout(p, lambda: _run_edit_event(p, str(f)))
     ctx = payload["hookSpecificOutput"]["additionalContext"]
     assert "still present" in ctx
 
@@ -169,11 +182,14 @@ def test_non_luau_and_missing_files_never_touch_state(p):
 
 
 def test_two_warnings_repeat_together_in_one_count_line(p):
-    f = _luau_file(p)
-    _fake_check(p, [_diag(f, code="A"), _diag(f, code="B")])
-    _capture_stdout(p, lambda: _run_edit_event(p, f))
-    _fake_check(p, [_diag(f, code="A"), _diag(f, code="B"), _diag(f, code="C")])
-    _, payload = _capture_stdout(p, lambda: _run_edit_event(p, f))
+    f = Path(_luau_file(p))
+    d_a = _diag(str(f), code="A")
+    d_b = _diag(str(f), code="B")
+    _fake_check(p, [d_a, d_b])
+    _capture_stdout(p, lambda: _run_edit_event(p, str(f)))
+    p.DeltaStore().classify(str(f), [d_a, d_b])   # sweep delivers/commits
+    _fake_check(p, [d_a, d_b, _diag(str(f), code="C")])
+    _, payload = _capture_stdout(p, lambda: _run_edit_event(p, str(f)))
     ctx = payload["hookSpecificOutput"]["additionalContext"]
-    assert "1 new warning(s) held" in ctx                    # C is held, counted
+    assert "1 new warning(s) held" in ctx                    # C held
     assert "2 previously reported warning(s) still present" in ctx
