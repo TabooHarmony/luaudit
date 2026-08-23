@@ -1,6 +1,6 @@
 [project]
 name = "luaudit"
-version = "1.0.0"
+version = "1.1.0"
 description = "Automatic Luau diagnostics for AI coding agents. Plugin for Claude Code and Codex (luau-lsp + selene + stylua, zero config)."
 readme = "README.md"
 license = {text = "MPL-2.0"}
