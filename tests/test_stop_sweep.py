@@ -133,6 +133,80 @@ def test_cli_dispatch_stop_hook(p):
     assert rc == 0
 
 
+# -- adaptive muting -----------------------------------------------------------
+
+def test_warning_mutes_after_threshold_and_announces_once(p):
+    a = str(Path(p.os.getcwd()) / "a.luau")
+    Path(a).write_text("local x = 1\n")
+    warn = _diag(a, code="UnusedVariable", severity="warning")
+    _fake_check(p, {a: [warn]})
+    st = p.DeltaStore()
+    for i in range(p.MUTE_THRESHOLD):
+        st.mark_dirty(p.os.getcwd())
+        rc, payload = _run_sweep(p)
+    ctx = payload["hookSpecificOutput"]["additionalContext"]
+    assert f"muted `UnusedVariable` after {p.MUTE_THRESHOLD} unfixed surfaces" in ctx
+    assert "luaudit unmute" in ctx
+
+    # Next turn: muted warning is suppressed, no repeat announcement.
+    st.mark_dirty(p.os.getcwd())
+    rc, payload = _run_sweep(p)
+    assert payload is None or "muted `" not in payload["hookSpecificOutput"]["additionalContext"]
+
+
+def test_unmute_resets_counter_so_warning_surfaces_fresh(p):
+    a = str(Path(p.os.getcwd()) / "a.luau")
+    Path(a).write_text("local x = 1\n")
+    warn = _diag(a, code="UnusedVariable", severity="warning")
+    _fake_check(p, {a: [warn]})
+    st = p.DeltaStore()
+    for _ in range(p.MUTE_THRESHOLD):
+        st.mark_dirty(p.os.getcwd())
+        _run_sweep(p)
+    assert st.unmute() == 1
+    st.mark_dirty(p.os.getcwd())
+    rc, payload = _run_sweep(p)
+    ctx = payload["hookSpecificOutput"]["additionalContext"]
+    assert "new warnings" in ctx and "UnusedVariable" in ctx
+
+
+def test_errors_are_never_muted(p):
+    a = str(Path(p.os.getcwd()) / "a.luau")
+    Path(a).write_text("local x = 1\n")
+    err = _diag(a, code="TypeError", severity="error")
+    _fake_check(p, {a: [err]})
+    st = p.DeltaStore()
+    for _ in range(p.MUTE_THRESHOLD + 5):
+        st.mark_dirty(p.os.getcwd())
+        rc, payload = _run_sweep(p)
+        ctx = payload["hookSpecificOutput"]["additionalContext"]
+        assert "TypeError" in ctx          # errors always shown in full
+        assert "muted `" not in ctx
+
+
+def test_package_unmute_command(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("LUAUDIT_HOME", str(tmp_path / "home"))
+    sys.path.insert(0, str(REPO / "src"))
+    import luaudit.cli as cli
+    from luaudit.deltastore import DeltaStore, fingerprint
+    st = DeltaStore()
+    st.mute("A|b")
+    rc = cli.main(["unmute"])
+    assert rc == 0
+    assert "unmuted 1" in capsys.readouterr().out
+    assert DeltaStore().muted() == {}
+    rc = cli.main(["unmute"])
+    assert "nothing to unmute" in capsys.readouterr().out
+
+
+def test_plugin_cli_unmute(p, capsys):
+    p.DeltaStore().mute("X|y")
+    rc = p.run_cli(["unmute"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "unmuted 1" in out
+
+
 def test_missing_dirty_root_skipped(p):
     st = p.DeltaStore()
     st.mark_dirty(str(Path(p.os.getcwd()) / "deleted-folder"))

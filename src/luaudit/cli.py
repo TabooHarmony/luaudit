@@ -97,6 +97,16 @@ def _cmd_sourcemap(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_unmute(args: argparse.Namespace) -> int:
+    from .deltastore import DeltaStore
+    removed = DeltaStore().unmute(getattr(args, "fingerprint", None))
+    if removed:
+        print(f"unmuted {removed} fingerprint(s); those warnings will surface again")
+    else:
+        print("nothing to unmute")
+    return 0
+
+
 def _cmd_doctor(args: argparse.Namespace) -> int:
     bootstrap.ensure_tools()
     if getattr(args, "bug_report", False):
@@ -200,6 +210,10 @@ def main(argv: list[str] | None = None) -> int:
     p_doctor = sub.add_parser("doctor", help="verify toolchain and studio mirror plugin")
     p_doctor.add_argument("--bug-report", action="store_true", dest="bug_report",
                           help="print a paste-ready environment + failure log report")
+    p_unmute = sub.add_parser("unmute",
+                              help="restore auto-muted warnings so they surface again")
+    p_unmute.add_argument("fingerprint", nargs="?", default=None,
+                          help="specific fingerprint (code|message); omit to unmute all")
     p_plugin = sub.add_parser("plugin", help="manage the Roblox Studio mirror plugin")
     p_plugin.add_argument("action", nargs="?", default="status",
                           choices=("install", "remove", "status"))
@@ -223,6 +237,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_sourcemap(args)
     if args.command == "doctor":
         return _cmd_doctor(args)
+    if args.command == "unmute":
+        return _cmd_unmute(args)
     if args.command == "plugin":
         return _cmd_plugin(args)
     if args.command == "version":

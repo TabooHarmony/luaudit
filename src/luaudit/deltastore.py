@@ -192,30 +192,39 @@ class DeltaStore:
         except Exception:
             return {}
 
-    def mute(self, fp: str, sample_message: str = "", now: float | None = None) -> None:
+    def mute(self, fp: str, sample_message: str = "", now: float | None = None) -> bool:
+        """Record a muted fingerprint. Returns True only on FIRST insert so
+        callers can announce the mute exactly once."""
         now = time.time() if now is None else now
         try:
             data = self._load()
-            data.setdefault("muted", {})[fp] = {
-                "sample": sample_message[:200],
-                "at": now,
-            }
+            muted = data.setdefault("muted", {})
+            if fp in muted:
+                return False
+            muted[fp] = {"sample": sample_message[:200], "at": now}
             self._save(data)
+            return True
         except Exception:
-            pass
+            return False
 
     def unmute(self, fp: str | None = None) -> int:
-        """Remove one or all muted fingerprints. Returns how many removed."""
+        """Remove one or all muted fingerprints. Returns how many removed.
+
+        Also resets the removed fingerprints' surface counters so a restored
+        warning starts counting from zero instead of insta-re-muting."""
         try:
             data = self._load()
             muted = data.get("muted", {})
-            if fp is None:
-                removed = len(muted)
-                data["muted"] = {}
-            else:
-                removed = 1 if fp in muted else 0
-                muted.pop(fp, None)
-            self._save(data)
+            targets = list(muted.keys()) if fp is None else [fp]
+            removed = 0
+            for t in targets:
+                if t in muted:
+                    del muted[t]
+                    removed += 1
+                    for entry in data.get("files", {}).values():
+                        entry.get("findings", {}).pop(t, None)
+            if removed:
+                self._save(data)
             return removed
         except Exception:
             return 0

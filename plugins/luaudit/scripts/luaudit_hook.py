@@ -685,6 +685,11 @@ _WS_RE = re.compile(r"\s+")
 SWEEP_MAX_FILES = 400
 SWEEP_BUDGET_SECONDS = 20.0
 
+# Adaptive muting: a warning surfaced this many times without ever being
+# acted on is treated as revealed noise for this project. Warnings only;
+# errors are immune. Every mute is announced and reversible (luaudit unmute).
+MUTE_THRESHOLD = 5
+
 
 def _delta_normalize_key(filepath: str) -> str:
     try:
@@ -810,26 +815,37 @@ class DeltaStore:
         except Exception:
             return {}
 
-    def mute(self, fp: str, sample_message: str = "", now: float | None = None) -> None:
+    def mute(self, fp: str, sample_message: str = "", now: float | None = None) -> bool:
+        """Record a muted fingerprint. True only on FIRST insert so callers
+        can announce the mute exactly once."""
         now = time.time() if now is None else now
         try:
             data = self._load()
-            data.setdefault("muted", {})[fp] = {"sample": sample_message[:200], "at": now}
+            muted = data.setdefault("muted", {})
+            if fp in muted:
+                return False
+            muted[fp] = {"sample": sample_message[:200], "at": now}
             self._save(data)
+            return True
         except Exception:
-            pass
+            return False
 
     def unmute(self, fp=None) -> int:
+        """Remove one or all muted fingerprints; also resets their surface
+        counters so a restored warning starts counting from zero."""
         try:
             data = self._load()
             muted = data.get("muted", {})
-            if fp is None:
-                removed = len(muted)
-                data["muted"] = {}
-            else:
-                removed = 1 if fp in muted else 0
-                muted.pop(fp, None)
-            self._save(data)
+            targets = list(muted.keys()) if fp is None else [fp]
+            removed = 0
+            for t in targets:
+                if t in muted:
+                    del muted[t]
+                    removed += 1
+                    for entry in data.get("files", {}).values():
+                        entry.get("findings", {}).pop(t, None)
+            if removed:
+                self._save(data)
             return removed
         except Exception:
             return 0
@@ -1247,6 +1263,7 @@ def run_stop_hook() -> int:
         lines: list = []               # error detail lines
         new_warnings: list = []
         repeat_warning_count = 0
+        muted_announcements: list = []
         for path, diags in (groups[k] for k in order):
             errs = [d for d in diags if d["severity"] == "error"]
             warns = [d for d in diags if d["severity"] == "warning"]
@@ -1255,6 +1272,20 @@ def run_stop_hook() -> int:
                 cls = store.classify(path, warns)
                 repeat_warning_count += cls["repeat_count"]
                 new_warnings.extend(cls["new"])
+                # Adaptive muting: surface-count each warning; when one has
+                # been shown MUTE_THRESHOLD times without ever disappearing
+                # (an edit that would have cleared it), treat it as revealed
+                # noise and mute it going forward. Loud and reversible.
+                counts = store.surface_counts(path)
+                for fp, n in counts.items():
+                    if n >= MUTE_THRESHOLD:
+                        sample = next((w["message"] for w in warns
+                                       if _delta_fingerprint(w) == fp), "")
+                        if store.mute(fp, sample_message=sample):
+                            muted_announcements.append(
+                                f"muted `{fp.split('|', 1)[0]}` after {n} unfixed surfaces"
+                                " (luaudit unmute restores)"
+                            )
 
         summary_bits = [f"{scanned} file(s) checked across {len(seen_roots)} edited folder(s)"]
         if truncated:
@@ -1269,6 +1300,10 @@ def run_stop_hook() -> int:
         tail: list = []
         if repeat_warning_count:
             tail.append(f"{repeat_warning_count} known warning(s) unchanged")
+        if muted_announcements:
+            # Mute announcements ride every path (full summary or quiet line)
+            # so they are always visible exactly once, at the moment they fire.
+            tail.extend(muted_announcements)
         if not parts:
             # Nothing new anywhere: one quiet line so a Stop hook with output
             # still reads as intentional, then silence next time.
@@ -1537,8 +1572,14 @@ def run_cli(argv: list[str]) -> int:
     args = [a for a in args if a != "--json"]
     strict = "--warnings" in args
     args = [a for a in args if a != "--warnings"]
+    if args and args[0] == "unmute":
+        store = DeltaStore()
+        removed = store.unmute(args[1] if len(args) > 1 else None)
+        print(f"unmuted {removed} fingerprint(s); those warnings will surface again"
+              if removed else "nothing to unmute")
+        return 0
     if not args:
-        print("usage: luaudit_hook.py check [--json] [--warnings] <file|dir> ...", file=sys.stderr)
+        print("usage: luaudit_hook.py check [--json] [--warnings] <file|dir> ... | unmute [fingerprint]", file=sys.stderr)
         return 2
     result = check_paths(args, cwd=os.getcwd())
     if as_json:
