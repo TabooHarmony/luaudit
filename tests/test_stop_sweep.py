@@ -33,11 +33,15 @@ def p(tmp_path, monkeypatch):
 
 
 def _fake_check(p, by_file):
-    """by_file: {abs_path: [diag dicts]}"""
+    """by_file: {abs_path: [diag dicts]} (matched case-insensitively; Windows
+    drive casing may differ between getcwd() and walked paths)."""
+    norm = lambda s: __import__("os").path.normcase(__import__("os").path.abspath(s))
+    table = {norm(k): v for k, v in by_file.items()}
+
     def fake(paths, cwd="."):
         diags = []
         for t in paths:
-            diags.extend(by_file.get(t, []))
+            diags.extend(table.get(norm(t), []))
         return {"diagnostics": diags,
                 "summary": {"errors": sum(1 for d in diags if d["severity"] == "error"),
                             "warnings": sum(1 for d in diags if d["severity"] == "warning"),
