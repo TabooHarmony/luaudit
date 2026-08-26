@@ -13,14 +13,16 @@ Luau code, verify it before declaring work complete.
 Run on a file or directory:
 
 ```bash
-python3 "<PLUGIN_ROOT>/scripts/luaudit_hook.py" check <file-or-directory>
-```
-
-Or, if the `luaudit` CLI is installed:
-
-```bash
 luaudit check <file-or-directory>
 ```
+
+If the `luaudit` CLI is not installed, run the hook engine directly:
+
+```bash
+python "<PLUGIN_ROOT>/scripts/luaudit_hook.py" check <file-or-directory>
+```
+
+(`python3` on macOS/Linux, `python` or `py` on Windows.)
 
 - Exit 0 with no output means the code is clean.
 - Non-zero exit (or diagnostics printed) means errors that should be fixed.
