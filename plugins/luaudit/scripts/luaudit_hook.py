@@ -1254,6 +1254,12 @@ def _hook_context(store: DeltaStore, entries: list) -> str | None:
                 f"new_warn={len(classified['new'])} repeats={classified['repeat_count']} "
                 f"muted_seen={classified['suppressed']}"
             )
+            # Also log the actual findings so a live tail can show them,
+            # colorized: errors red, warnings yellow.
+            for d in sorted(errors, key=lambda d: (int(d.get("line", 0)), int(d.get("column", 0)))):
+                _log_event(f"ERROR {_fmt_diag(d)}")
+            for d in sorted(classified["new"], key=lambda d: (int(d.get("line", 0)), int(d.get("column", 0)))):
+                _log_event(f"WARN {_fmt_diag(d)}")
         else:
             # Fully clean pass: forget stale fingerprints so a later
             # regression reads as new again and gets injected.
@@ -1411,6 +1417,12 @@ def run_stop_hook(event: dict | None = None) -> int:
             f"new_warn={len(new_warnings)} repeats={repeat_warning_count} "
             f"mutes={len(muted_announcements)}"
         )
+        for d in sorted(errors, key=lambda d: (int(d.get("line", 0)), int(d.get("column", 0)))):
+            _log_event(f"ERROR {_fmt_diag(d)}")
+        for d in sorted(new_warnings[:10], key=lambda d: (int(d.get("line", 0)), int(d.get("column", 0)))):
+            _log_event(f"WARN {_fmt_diag(d)}")
+        if not errors and not new_warnings:
+            _log_event("CLEAN no errors, no warnings")
         if not parts:
             # Nothing new anywhere: stay fully silent on repeat passes.
             if tail and not stop_hook_active:
