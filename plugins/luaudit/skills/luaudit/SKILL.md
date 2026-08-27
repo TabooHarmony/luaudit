@@ -16,6 +16,10 @@ Run on a file or directory:
 luaudit check <file-or-directory>
 ```
 
+Prefer paths relative to the current directory. Windows shells (git-bash,
+MSYS) strip backslashes from unquoted absolute paths, and the tool then
+honestly reports the mangled path as missing.
+
 If the `luaudit` CLI is not installed, run the hook engine directly:
 
 ```bash
