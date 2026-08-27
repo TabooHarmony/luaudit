@@ -59,11 +59,19 @@ def _cmd_format(args: argparse.Namespace) -> int:
     if not bootstrap.has_stylua():
         print("stylua unavailable; cannot format", file=sys.stderr)
         return 2
-    changed = bootstrap.format_files(args.paths, cwd=args.cwd)
-    for f in changed:
+    res = bootstrap.format_files(args.paths, cwd=args.cwd)
+    for f in res["changed"]:
         print(f"formatted {f}")
-    if not changed:
-        print("nothing to format")
+    for f in res["clean"]:
+        print(f"already formatted: {f}")
+    for f in res["failed"]:
+        print(f"stylua failed on {f}", file=sys.stderr)
+    if res["missing"]:
+        for f in res["missing"]:
+            print(f"no such file or directory: {f}", file=sys.stderr)
+        return 2
+    if res["failed"]:
+        return 1
     return 0
 
 

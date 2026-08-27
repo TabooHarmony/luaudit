@@ -13,6 +13,7 @@ import os
 import platform
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import time
@@ -239,25 +240,68 @@ def init_configs(directory: Path) -> list[str]:
     return wrote
 
 
-def format_files(paths: list[str], cwd: str = ".") -> list[str]:
-    """Format files with stylua. Returns paths that changed."""
+def format_files(paths: list[str], cwd: str = ".") -> dict:
+    """Format files (or Luau files under directories) in place with stylua.
+
+    Every named path is classified -- nothing is silently skipped. Returns
+    {"changed", "clean", "missing", "failed"}:
+    - changed: files whose bytes stylua rewrote
+    - clean: existing files stylua left untouched (already formatted)
+    - missing: paths that exist neither as file nor directory. Agents run
+      through shells that eat Windows backslashes, so "C:Users..." shows up
+      here; reporting it is the whole point (the old silent skip printed
+      "nothing to format" over a genuinely unformatted file).
+    - failed: existing files where stylua itself errored
+    """
+    original = list(paths)
     paths = [p if os.path.isabs(p) else os.path.join(cwd, p) for p in paths]
     stylua = BIN_DIR / _exe("stylua")
-    if not stylua.exists():
-        return []
+    files: list[str] = []
+    missing: list[str] = []
+    for p, raw in zip(paths, original):
+        if os.path.isfile(p):
+            files.append(p)
+        elif os.path.isdir(p):
+            for root, dirnames, fs in os.walk(p):
+                dirnames[:] = [d for d in dirnames
+                               if d not in (".git", "node_modules", "Packages", "Vendor")]
+                for f in fs:
+                    if f.endswith((".luau", ".lua")):
+                        files.append(os.path.join(root, f))
+        else:
+            # Echo the caller's own token, not the cwd-joined form: a mangled
+            # Windows path must read as the mangled path so the caller sees
+            # what their shell actually passed.
+            missing.append(raw)
     changed: list[str] = []
-    for p in paths:
-        if not os.path.isfile(p):
+    clean: list[str] = []
+    failed: list[str] = []
+    if not stylua.exists():
+        # CLI guards with has_stylua() and refuses earlier; a direct caller
+        # still learns which paths were unusable.
+        return {"changed": [], "clean": [], "missing": missing, "failed": files}
+    for f in files:
+        try:
+            before = Path(f).read_bytes()
+            proc = subprocess.run(
+                [str(stylua), f],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            after = Path(f).read_bytes()
+        except (OSError, subprocess.SubprocessError) as e:
+            log_event(f"ERROR stylua failed on {f}: {e}")
+            failed.append(f)
             continue
-        proc = __import__("subprocess").run(
-            [str(stylua), p],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if proc.returncode == 0:
-            changed.append(p)
-    return changed
+        if proc.returncode != 0:
+            log_event(f"ERROR stylua failed on {f} (exit {proc.returncode}): {proc.stderr.strip()}")
+            failed.append(f)
+        elif before != after:
+            changed.append(f)
+        else:
+            clean.append(f)
+    return {"changed": changed, "clean": clean, "missing": missing, "failed": failed}
 
 
 # ---------------------------------------------------------------------------

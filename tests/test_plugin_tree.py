@@ -764,3 +764,22 @@ def test_sh_hook_script_end_to_end(fake_toolchain, tmp_path):
     assert r2.returncode == 0
     assert r2.stdout.strip() == "", "clean file must be silent through the .sh hook"
 
+
+
+# ---------------------------------------------------------------------------
+# CLI-surface guard (regression: demo agents reaching for the package CLI's
+# 'format' verb through the plugin engine; falling through to hook mode
+# meant exit 0 + no action = a false success).
+# ---------------------------------------------------------------------------
+
+def test_engine_rejects_unknown_subcommand(capsys):
+    rc = engine.main(["format", "some.luau"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "unknown command" in err
+    assert "format" in err
+
+
+def test_engine_bare_check_without_paths_still_errors():
+    # 'check' with no paths keeps its own usage error, not the unknown guard.
+    assert engine.main(["check"]) == 2

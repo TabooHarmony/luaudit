@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import zipfile
 from pathlib import Path
 
@@ -105,3 +106,113 @@ def test_urls_shape():
     assert set(urls) == {"luau-lsp", "selene", "stylua"}
     for u in urls.values():
         assert u.startswith("https://")
+
+
+# ---------------------------------------------------------------------------
+# format_files: honest reporting (regression: the demo run's "nothing to
+# format" while the file was genuinely unformatted -- the agent's shell ate
+# the backslashes out of the Windows path and the old code skipped silently).
+# ---------------------------------------------------------------------------
+
+class _FakeStylua:
+    """Stand-in for subprocess.run on the stylua binary."""
+
+    def __init__(self, mode: str):
+        self.mode = mode  # "rewrite" | "noop" | "fail"
+        self.calls: list[list[str]] = []
+
+    def __call__(self, cmd, **kw):
+        self.calls.append(cmd)
+        target = cmd[-1]
+
+        class R:
+            returncode = 0
+            stderr = "stylua blew up"
+
+        if self.mode == "fail":
+            R.returncode = 1
+        elif self.mode == "rewrite":
+            with open(target, "wb") as fh:
+                fh.write(b"local x = 1\n")
+        return R()
+
+
+def _fmt_setup(tmp_path, monkeypatch, mode: str) -> _FakeStylua:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    (bin_dir / bootstrap._exe("stylua")).write_text("#!/bin/sh\n")
+    monkeypatch.setattr(bootstrap, "BIN_DIR", bin_dir)
+    fake = _FakeStylua(mode)
+    fake_mod = type("sub", (), {"run": fake, "SubprocessError": Exception})
+    monkeypatch.setattr(bootstrap, "subprocess", fake_mod)
+    return fake
+
+
+def test_format_files_reports_missing_not_skips(tmp_path, monkeypatch):
+    fake = _fmt_setup(tmp_path, monkeypatch, "noop")
+    res = bootstrap.format_files(["C:UsersAdmindemoutils.luau"], cwd=str(tmp_path))
+    # The caller's own mangled token comes back verbatim...
+    assert res["missing"] == ["C:UsersAdmindemoutils.luau"]
+    # ...and nothing ran.
+    assert fake.calls == []
+
+
+def test_format_files_changed_vs_clean(tmp_path, monkeypatch):
+    messy = tmp_path / "messy.luau"
+    messy.write_bytes(b"local   x=1\n")
+    tidy = tmp_path / "tidy.luau"
+    tidy.write_bytes(b"local x = 1\n")
+
+    fake = _fmt_setup(tmp_path, monkeypatch, "rewrite")
+    res = bootstrap.format_files([str(messy)], cwd=str(tmp_path))
+    assert res["changed"] == [str(messy)] and not res["clean"] and not res["missing"]
+
+    fake = _fmt_setup(tmp_path, monkeypatch, "noop")
+    res = bootstrap.format_files([str(tidy)], cwd=str(tmp_path))
+    assert res["clean"] == [str(tidy)] and not res["changed"]
+
+
+def test_format_files_walks_directories(tmp_path, monkeypatch):
+    pkg = tmp_path / "pkg"
+    (pkg / "inner").mkdir(parents=True)
+    (pkg / "a.luau").write_bytes(b"x = 1\n")
+    (pkg / "inner" / "b.lua").write_bytes(b"y = 2\n")
+    (pkg / "ignore.txt").write_text("nope")
+    fake = _fmt_setup(tmp_path, monkeypatch, "noop")
+    res = bootstrap.format_files([str(pkg)], cwd=str(tmp_path))
+    assert sorted(os.path.basename(c[-1]) for c in fake.calls) == ["a.luau", "b.lua"]
+    assert not res["missing"]
+
+
+def test_format_files_stylua_failure_is_visible(tmp_path, monkeypatch):
+    f = tmp_path / "x.luau"
+    f.write_bytes(b"local x = 1\n")
+    _fmt_setup(tmp_path, monkeypatch, "fail")
+    res = bootstrap.format_files([str(f)], cwd=str(tmp_path))
+    assert res["failed"] == [str(f)]
+    assert not res["changed"] and not res["clean"]
+
+
+def test_cli_format_missing_path_exits_2(tmp_path, monkeypatch, capsys):
+    """The demo failure end-to-end: a path the shell mangled must NOT be
+    reported as 'nothing to format' with exit 0."""
+    monkeypatch.setattr(bootstrap, "ensure_tools", lambda: None)
+    monkeypatch.setattr(bootstrap, "has_stylua", lambda: True)
+    _fmt_setup(tmp_path, monkeypatch, "noop")
+    rc = cli.main(["format", "C:UsersAdmindemoutils.luau", "--cwd", str(tmp_path)])
+    cap = capsys.readouterr()
+    assert rc == 2
+    assert "no such file or directory" in cap.err
+    assert "nothing to format" not in cap.out + cap.err
+
+
+def test_cli_format_all_clean_is_explicit(tmp_path, monkeypatch, capsys):
+    tidy = tmp_path / "tidy.luau"
+    tidy.write_bytes(b"local x = 1\n")
+    monkeypatch.setattr(bootstrap, "ensure_tools", lambda: None)
+    monkeypatch.setattr(bootstrap, "has_stylua", lambda: True)
+    _fmt_setup(tmp_path, monkeypatch, "noop")
+    rc = cli.main(["format", str(tidy), "--cwd", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "already formatted" in out

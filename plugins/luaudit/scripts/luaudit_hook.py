@@ -1719,6 +1719,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_cli(argv[1:])
     if argv and argv[0] == "mirror":
         return run_mirror(argv[1:])
+    if argv and argv[0] == "unmute":
+        return run_cli(argv)
     if argv and argv[0] == "stop-hook":
         # Turn-end sweep. Invoked by the harnesses' Stop hook entries.
         try:
@@ -1729,6 +1731,14 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] in ("--help", "-h", "help"):
         print("luaudit plugin engine: hook mode (stdin event), 'check [--json] <paths>', 'mirror [--json] [--check-all]', or 'stop-hook' (turn-end sweep)")
         return 0
+    if argv and argv[0] not in ("check", "mirror", "stop-hook"):
+        # A typo'd or CLI-only subcommand (e.g. 'format') must fail loudly.
+        # Falling through to hook mode reads stdin, exits 0, and does
+        # nothing: a false success for whatever the caller meant to run.
+        print(f"unknown command: {argv[0]!r}; this engine supports 'check', "
+              "'mirror', 'stop-hook', 'unmute', hook mode (stdin event), or "
+              "use the luaudit CLI for format/init/doctor", file=sys.stderr)
+        return 2
     return run_hook()
 
 
